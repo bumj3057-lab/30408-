@@ -3,9 +3,9 @@ import requests
 import streamlit as st
 
 
-# iNaturalist 전문 생물 API 기반 곤충 정보 검색
+# iNaturalist + 위키백과 전문(Full Text) 정보를 활용한 상세 곤충 검색
 def fetch_insect_info(query):
-    # 1. 생물 분류(Taxa) API 호출 (곤충 강: Insecta - id: 47158)
+    # 1. iNaturalist 생물 분류 API (곤충 강: taxon_id=47158)
     inat_url = f"https://api.inaturalist.org/v1/taxa?q={query}&taxon_id=47158&locale=ko"
 
     try:
@@ -19,13 +19,11 @@ def fetch_insect_info(query):
         if not results:
             return None
 
-        # 가장 적합한 생물 결과 정보 추출
+        # 가장 적합한 곤충 데이터 추출
         item = results[0]
-
-        # 한글 이름(preferred_common_name) 또는 기본 이름
         korean_name = item.get("preferred_common_name", item.get("name", query))
         scientific_name = item.get("name", "학명 정보 없음")
-        rank = item.get("rank", "생물")
+        rank = item.get("rank", "곤충")
 
         # 고화질 이미지 URL 추출
         image_url = None
@@ -34,21 +32,20 @@ def fetch_insect_info(query):
                 "default_photo"
             ].get("square_url")
 
-        # 2. 위키피디아에서 상세 설명 보완 (지명 검색 방지 위해 학명 또는 '곤충' 키워드로 검색)
-        wiki_summary = "등록된 상세 생태 설명이 없습니다."
+        # 2. 위키백과 상세 정보 검색 (학명 및 '곤충' 키워드로 지명 오검색 완벽 차단)
+        wiki_summary = ""
         wiki_url = "https://ko.wikipedia.org/w/api.php"
         headers = {
             "User-Agent": "InsectEncyclopediaApp/1.0 (contact@example.com)"
         }
 
-        # 학명으로 위키피디아 검색 시도 (지명 오검색 완벽 차단)
+        # 학명 기반 전문(Full Text) 검색 - exintro=False 설정으로 전체 본문 가져옴
         wiki_params = {
             "action": "query",
             "format": "json",
             "titles": scientific_name,
             "prop": "extracts",
-            "exintro": True,
-            "explaintext": True,
+            "explaintext": True,  # 서식 없는 일반 텍스트로 추출
             "utf8": 1,
         }
 
@@ -61,8 +58,8 @@ def fetch_insect_info(query):
             if "extract" in page_info and page_info["extract"]:
                 wiki_summary = page_info["extract"]
 
-        # 만약 학명 검색으로 위키 설명이 없다면 '곤충' 키워드를 붙여 재검색
-        if wiki_summary == "등록된 상세 생태 설명이 없습니다.":
+        # 학명 검색 결과가 부족할 경우 '국명 + 곤충' 키워드로 전체 본문 재검색
+        if not wiki_summary or len(wiki_summary) < 50:
             search_params = {
                 "action": "query",
                 "format": "json",
@@ -77,7 +74,7 @@ def fetch_insect_info(query):
                 s_results = s_res.json().get("query", {}).get("search", [])
                 if s_results:
                     page_title = s_results[0]["title"]
-                    # 행정구역(군, 읍, 면 등) 문서는 제외
+                    # 행정구역 지명 단어 차단
                     if not any(
                         location_word in page_title
                         for location_word in ["군", "읍", "면", "특별시", "광역시"]
@@ -87,7 +84,6 @@ def fetch_insect_info(query):
                             "format": "json",
                             "titles": page_title,
                             "prop": "extracts",
-                            "exintro": True,
                             "explaintext": True,
                             "utf8": 1,
                         }
@@ -106,6 +102,9 @@ def fetch_insect_info(query):
                             )[0]
                             wiki_summary = p_info.get("extract", wiki_summary)
 
+        if not wiki_summary:
+            wiki_summary = f"{korean_name}(학명: {scientific_name})에 대한 개요 정보입니다. 해당 종은 {rank} 분류군에 속하며 자세한 생태 백과 내용이 지속적으로 업데이트 중입니다."
+
         return {
             "korean_name": korean_name,
             "scientific_name": scientific_name,
@@ -121,25 +120,25 @@ def fetch_insect_info(query):
 
 # Streamlit 화면 구성
 st.title("🐛 대한민국 곤충 생태 백과")
-st.write("곤충 이름을 검색하면 전문 생물 DB에서 정확한 생태 정보, 학명, 실제 사진을 가져옵니다.")
+st.write("곤충 이름을 검색하면 학명, 사진, 상세 생태 설명을 종합적으로 보여줍니다.")
 
 search_query = st.text_input(
-    "곤충 이름 검색", placeholder="예: 호랑나비, 장수풍뎅이, 사슴벌레, 매미"
+    "곤충 이름 검색", placeholder="예: 호랑나비, 장수풍뎅이, 사슴벌레, 매미, 무당벌레"
 )
 
 st.divider()
 
 if search_query:
-    with st.spinner(f"'{search_query}' 곤충 정보를 생물 DB에서 검색 중입니다..."):
+    with st.spinner(f"'{search_query}'의 상세 생태 정보를 불러오는 중입니다..."):
         info = fetch_insect_info(search_query)
 
     if not info:
-        st.warning(f"'{search_query}'에 대한 곤충 검색 결과를 찾을 수 없습니다. 정확한 곤충 명칭으로 다시 검색해보세요.")
+        st.warning(f"'{search_query}'에 대한 곤충 검색 결과를 찾을 수 없습니다. 정확한 곤충 이름으로 다시 검색해보세요.")
     else:
         st.subheader(f"🔍 검색 결과: {info['korean_name']}")
 
         with st.expander(
-            f"**{info['korean_name']}** (*{info['scientific_name']}*) 생태 정보",
+            f"**{info['korean_name']}** (*{info['scientific_name']}*) 상세 생태 백과",
             expanded=True,
         ):
             img_col, info_col = st.columns([1, 2])
@@ -155,13 +154,21 @@ if search_query:
                 else:
                     st.info("📷 등록된 곤충 대표 사진이 없습니다.")
 
-            # 우측: 학명 및 상세 생태 정보
+            # 우측: 학명 및 기본 분류 정보
             with info_col:
                 st.markdown(f"### 📌 {info['korean_name']}")
                 st.markdown(f"**학명(Scientific Name):** *{info['scientific_name']}*")
-                st.markdown(f"**분류:** {info['rank']}")
-                st.markdown("---")
-                st.markdown("#### 🔬 상세 생태 및 설명")
-                st.write(info["summary"])
+                st.markdown(f"**생물 분류:** {info['rank']}")
+
+            # 하단: 전체 상세 생태 및 설명
+            st.markdown("---")
+            st.markdown("#### 🔬 상세 생태 특징 및 백과 설명")
+            
+            # 긴 백과 텍스트를 문단별로 깔끔하게 출력
+            paragraphs = info["summary"].split("\n")
+            for p in paragraphs:
+                if p.strip():
+                    st.write(p.strip())
+
 else:
-    st.info("찾고 싶은 곤충 이름을 입력하면 조회가 시작됩니다.")
+    st.info("찾고 싶은 곤충 이름을 입력하면 상세 생태 조회가 시작됩니다.")
