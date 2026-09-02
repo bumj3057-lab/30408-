@@ -3,12 +3,12 @@ import pandas as pd
 import streamlit as st
 
 
-# 데이터베이스 초기화 및 기본 샘플 데이터 입력
+# 데이터베이스 초기화 및 컬럼 자동 업데이트
 def init_db():
     conn = sqlite3.connect("korea_insects.db")
     cursor = conn.cursor()
 
-    # 상세 생태 정보를 위한 테이블 생성 (기존 DB 파일이 있다면 삭제 후 새로 실행 권장)
+    # 1. 기본 테이블 생성 (없을 경우)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS insects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +23,21 @@ def init_db():
         )
     """)
 
-    # 테이블이 비어있을 경우 테스트용 기본 데이터 추가
+    # 2. 기존 테이블에 누락된 컬럼이 있다면 자동으로 추가 (기존 DB 호환용)
+    cursor.execute("PRAGMA table_info(insects)")
+    existing_columns = [col[1] for col in cursor.fetchall()]
+
+    new_columns = {
+        "diet": "TEXT",
+        "activity_time": "TEXT",
+        "image_url": "TEXT",
+    }
+
+    for col_name, col_type in new_columns.items():
+        if col_name not in existing_columns:
+            cursor.execute(f"ALTER TABLE insects ADD COLUMN {col_name} {col_type}")
+
+    # 3. 데이터가 비어있을 경우 테스트용 샘플 데이터 입력
     cursor.execute("SELECT COUNT(*) FROM insects")
     if cursor.fetchone()[0] == 0:
         sample_data = [
@@ -73,6 +87,7 @@ def init_db():
     conn.close()
 
 
+# 데이터베이스 초기화
 init_db()
 
 # 화면 기본 설정
@@ -134,8 +149,7 @@ else:
             with info_col:
                 st.markdown(f"### 📌 {row['korean_name']}")
                 st.markdown(f"**학명:** *{row['scientific_name']}*")
-                
-                # 기본 생태 환경
+
                 st.markdown("---")
                 st.markdown(f"- **서식 환경:** {row['habitat'] or '정보 없음'}")
                 st.markdown(f"- **활동/번식 시기:** {row['breeding_season'] or '정보 없음'}")
