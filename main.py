@@ -3,57 +3,58 @@ import requests
 import streamlit as st
 
 
-# iNaturalist + 위키백과 전문 정보를 활용한 상세 곤충 검색 (한국 사진 우선)
+# iNaturalist + 위키백과 전문 정보를 활용한 상세 곤충 검색 (한국 서식 곤충 전용)
 def fetch_insect_info(query):
-    # 1. iNaturalist 생물 분류 API (곤충 강: taxon_id=47158)
-    inat_url = (
-        f"https://api.inaturalist.org/v1/taxa?q={query}&taxon_id=47158&locale=ko"
-    )
-
     try:
-        res = requests.get(inat_url, timeout=5)
+        # 1. 대한민국(place_id=6857) 내에서 관찰된 곤충(taxon_id=47158) 검색
+        # 한국 내 실제 관찰 기록이 있는 생물군만 조회하여 해외 전용 서식 곤충 차단
+        search_url = f"https://api.inaturalist.org/v1/observations?q={query}&taxon_id=47158&place_id=6857&per_page=1&locale=ko"
+        res = requests.get(search_url, timeout=5)
+
         if res.status_code != 200:
             return None
 
         data = res.json()
         results = data.get("results", [])
 
+        # 한국 내 관찰 기록이 없는 경우 (해외 서식 곤충 등)
         if not results:
             return None
 
-        # 가장 적합한 곤충 데이터 추출
-        item = results[0]
-        taxon_id = item.get("id")
-        korean_name = item.get("preferred_common_name", item.get("name", query))
-        scientific_name = item.get("name", "학명 정보 없음")
-        rank = item.get("rank", "곤충")
+        # 관찰 기록에서 곤충 분류(Taxon) 정보 추출
+        obs = results[0]
+        taxon = obs.get("taxon", {})
+        taxon_id = taxon.get("id")
 
-        # --- [수정] 한국(place_id=6857)에서 촬영된 관찰 사진 우선 조회 ---
+        if not taxon_id:
+            return None
+
+        korean_name = taxon.get(
+            "preferred_common_name", taxon.get("name", query)
+        )
+        scientific_name = taxon.get("name", "학명 정보 없음")
+        rank = taxon.get("rank", "곤충")
+
+        # --- 한국 관찰 사진 추출 ---
         image_url = None
-        korea_obs_url = f"https://api.inaturalist.org/v1/observations?taxon_id={taxon_id}&place_id=6857&photos=true&per_page=1"
-        obs_res = requests.get(korea_obs_url, timeout=5)
+        if obs.get("photos"):
+            photo_info = obs["photos"][0]
+            image_url = photo_info.get("url", "").replace("square", "medium")
 
-        if obs_res.status_code == 200:
-            obs_data = obs_res.json().get("results", [])
-            if obs_data and obs_data[0].get("photos"):
-                photo_info = obs_data[0]["photos"][0]
-                image_url = photo_info.get("url", "").replace("square", "medium")
-
-        # 한국 사진 관찰 기록이 없을 경우 기본 대표 사진 사용
-        if not image_url and item.get("default_photo"):
-            image_url = item["default_photo"].get("medium_url") or item[
+        # 만약 해당 관찰 기록에 사진이 없다면, 대표 사진 사용
+        if not image_url and taxon.get("default_photo"):
+            image_url = taxon["default_photo"].get("medium_url") or taxon[
                 "default_photo"
             ].get("square_url")
 
-        # --- [수정] 한국 내 관찰 기반 생태 데이터 추출 (월별 활동 및 관찰 수) ---
-        # place_id=6857을 추가하여 한국 내 관찰 수만 계산
+        # --- 한국 내 누적 관찰 수 및 활동 시기 추출 ---
         korea_stats_url = f"https://api.inaturalist.org/v1/observations?taxon_id={taxon_id}&place_id=6857&per_page=0"
         stats_res = requests.get(korea_stats_url, timeout=5)
         observations_count = 0
         if stats_res.status_code == 200:
             observations_count = stats_res.json().get("total_results", 0)
 
-        # 한국 내 월별 활동 데이터를 가져오기 위한 API 요청
+        # 한국 내 월별 활동 히스토그램
         histogram_url = f"https://api.inaturalist.org/v1/observations/histogram?taxon_id={taxon_id}&place_id=6857&date_field=observed"
         histo_res = requests.get(histogram_url, timeout=5)
 
@@ -62,7 +63,6 @@ def fetch_insect_info(query):
             month_data = (
                 histo_res.json().get("results", {}).get("month_of_year", {})
             )
-            # 가장 많이 관찰되는 Top 4 월 추출
             sorted_months = sorted(
                 month_data.items(), key=lambda x: x[1], reverse=True
             )
@@ -162,9 +162,9 @@ def fetch_insect_info(query):
 
 
 # Streamlit 화면 구성
-st.title("🐛 대한민국 곤충 생태 백과")
+st.title("🐛 대한민국 자생/서식 곤충 생태 백과")
 st.write(
-    "곤충 이름을 검색하면 학명, 국내 관찰 사진, 상세 생태 설명을 종합적으로 보여줍니다."
+    "국내에 서식하는 곤충 이름을 검색하면 학명, 국내 관찰 사진, 상세 생태 설명을 보여줍니다."
 )
 
 search_query = st.text_input(
@@ -175,13 +175,13 @@ st.divider()
 
 if search_query:
     with st.spinner(
-        f"'{search_query}'의 상세 생태 정보를 불러오는 중입니다..."
+        f"'{search_query}'의 국내 생태 정보를 불러오는 중입니다..."
     ):
         info = fetch_insect_info(search_query)
 
     if not info:
         st.warning(
-            f"'{search_query}'에 대한 곤충 검색 결과를 찾을 수 없습니다. 정확한 곤충 이름으로 다시 검색해보세요."
+            f"'{search_query}'에 대한 국내 서식 곤충 검색 결과를 찾을 수 없습니다. (해외 전용 서식 곤충이거나 정확하지 않은 이름일 수 있습니다.)"
         )
     else:
         st.subheader(f"🔍 검색 결과: {info['korean_name']}")
@@ -201,7 +201,7 @@ if search_query:
                         use_container_width=True,
                     )
                 else:
-                    st.info("📷 등록된 곤충 사진이 없습니다.")
+                    st.info("📷 등록된 국내 사진이 없습니다.")
 
             # 우측: 학명 및 기본 생태 정보
             with info_col:
