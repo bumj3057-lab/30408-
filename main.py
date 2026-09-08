@@ -3,7 +3,7 @@ import requests
 import streamlit as st
 
 
-# iNaturalist + 위키백과 전문 정보를 활용한 상세 곤충 검색
+# iNaturalist + 위키백과 전문 정보를 활용한 상세 곤충 검색 (한국 사진 우선)
 def fetch_insect_info(query):
     # 1. iNaturalist 생물 분류 API (곤충 강: taxon_id=47158)
     inat_url = (
@@ -28,18 +28,33 @@ def fetch_insect_info(query):
         scientific_name = item.get("name", "학명 정보 없음")
         rank = item.get("rank", "곤충")
 
-        # 고화질 이미지 URL 추출
+        # --- [수정] 한국(place_id=6857)에서 촬영된 관찰 사진 우선 조회 ---
         image_url = None
-        if item.get("default_photo"):
+        korea_obs_url = f"https://api.inaturalist.org/v1/observations?taxon_id={taxon_id}&place_id=6857&photos=true&per_page=1"
+        obs_res = requests.get(korea_obs_url, timeout=5)
+
+        if obs_res.status_code == 200:
+            obs_data = obs_res.json().get("results", [])
+            if obs_data and obs_data[0].get("photos"):
+                photo_info = obs_data[0]["photos"][0]
+                image_url = photo_info.get("url", "").replace("square", "medium")
+
+        # 한국 사진 관찰 기록이 없을 경우 기본 대표 사진 사용
+        if not image_url and item.get("default_photo"):
             image_url = item["default_photo"].get("medium_url") or item[
                 "default_photo"
             ].get("square_url")
 
-        # --- [추가] 1-1. iNaturalist 관찰 기반 생태 데이터 추출 (월별 활동 및 관찰 수) ---
-        observations_count = item.get("observations_count", 0)
+        # --- [수정] 한국 내 관찰 기반 생태 데이터 추출 (월별 활동 및 관찰 수) ---
+        # place_id=6857을 추가하여 한국 내 관찰 수만 계산
+        korea_stats_url = f"https://api.inaturalist.org/v1/observations?taxon_id={taxon_id}&place_id=6857&per_page=0"
+        stats_res = requests.get(korea_stats_url, timeout=5)
+        observations_count = 0
+        if stats_res.status_code == 200:
+            observations_count = stats_res.json().get("total_results", 0)
 
-        # 월별 활동 데이터를 가져오기 위한 추가 API 요청
-        histogram_url = f"https://api.inaturalist.org/v1/observations/histogram?taxon_id={taxon_id}&date_field=observed"
+        # 한국 내 월별 활동 데이터를 가져오기 위한 API 요청
+        histogram_url = f"https://api.inaturalist.org/v1/observations/histogram?taxon_id={taxon_id}&place_id=6857&date_field=observed"
         histo_res = requests.get(histogram_url, timeout=5)
 
         active_months = []
@@ -47,7 +62,7 @@ def fetch_insect_info(query):
             month_data = (
                 histo_res.json().get("results", {}).get("month_of_year", {})
             )
-            # 가장 많이 관찰되는 Top 3 월 추출
+            # 가장 많이 관찰되는 Top 4 월 추출
             sorted_months = sorted(
                 month_data.items(), key=lambda x: x[1], reverse=True
             )
@@ -149,7 +164,7 @@ def fetch_insect_info(query):
 # Streamlit 화면 구성
 st.title("🐛 대한민국 곤충 생태 백과")
 st.write(
-    "곤충 이름을 검색하면 학명, 사진, 상세 생태 설명을 종합적으로 보여줍니다."
+    "곤충 이름을 검색하면 학명, 국내 관찰 사진, 상세 생태 설명을 종합적으로 보여줍니다."
 )
 
 search_query = st.text_input(
@@ -182,11 +197,11 @@ if search_query:
                 if info["image_url"]:
                     st.image(
                         info["image_url"],
-                        caption=f"{info['korean_name']} 실제 사진",
+                        caption=f"{info['korean_name']} 국내 관찰 사진",
                         use_container_width=True,
                     )
                 else:
-                    st.info("📷 등록된 곤충 대표 사진이 없습니다.")
+                    st.info("📷 등록된 곤충 사진이 없습니다.")
 
             # 우측: 학명 및 기본 생태 정보
             with info_col:
@@ -196,14 +211,14 @@ if search_query:
                 )
                 st.markdown(f"**생물 분류:** {info['rank']}")
 
-                # --- [추가] 곤충 생태 요약 정보 지표 ---
+                # --- 곤충 생태 요약 정보 지표 ---
                 st.markdown("---")
-                st.markdown("#### 🌿 곤충 생태 요약")
+                st.markdown("#### 🌿 국내 관찰 생태 요약")
                 st.write(
-                    f"• **주요 관찰/활동 시기:** {info['active_months']}"
+                    f"• **주요 국내 관찰/활동 시기:** {info['active_months']}"
                 )
                 st.write(
-                    f"• **전 세계 누적 관찰 기록:** {info['observations_count']:,}회"
+                    f"• **국내 누적 관찰 기록:** {info['observations_count']:,}회"
                 )
 
             # 하단: 전체 상세 생태 및 설명
